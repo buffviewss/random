@@ -22,11 +22,6 @@ AUDIO_WHITELIST=""
 
 
 usage() {
-Environment variables:
-  FONT_WHITELIST       Comma-separated UI font families (e.g., "Ubuntu,Roboto,DejaVu Sans")
-  MONO_WHITELIST       Comma-separated monospace families (e.g., "JetBrains Mono,Fira Code")
-  AUDIO_WHITELIST      Comma-separated pactl sink names to choose from
-
   cat <<EOF
 Usage: $0 [options]
 
@@ -40,6 +35,11 @@ Options:
   --dry-run                 Show the commands that would run, without making changes
   --no-update               Skip 'sudo apt-get update' before installs
   -h, --help                Show this help and exit
+
+Environment variables:
+  FONT_WHITELIST       Comma-separated UI font families (e.g., "Ubuntu,Roboto,DejaVu Sans")
+  MONO_WHITELIST       Comma-separated monospace families (e.g., "JetBrains Mono,Fira Code")
+  AUDIO_WHITELIST      Comma-separated pactl sink names to choose from
 
 Examples:
   $0 --install-fonts           # Install fonts, then randomize font + audio sink
@@ -166,14 +166,14 @@ pick_random_line() {
 }
 split_csv() {
   # Print each comma-separated token on a new line, trimming spaces
-  printf "%s" "$1" | tr ',' '\n' | sed 's/^\s\+//; s/\s\+$//' | sed '/^$/d'
+  printf "%s" "$1" | tr ',' '\n' | sed 's/^[[:space:]]\+//; s/[[:space:]]\+$//' | sed '/^$/d'
 }
 
 list_installed_font_families() {
   # Args: filter (e.g., ":spacing=100" for monospace)
   local filter="${1:-}"
   fc-list "$filter" -f '%{family}\n' 2>/dev/null | \
-    tr ',' '\n' | sed 's/^\s\+//; s/\s\+$//' | sed '/^$/d' | \
+    tr ',' '\n' | sed 's/^[[:space:]]\+//; s/[[:space:]]\+$//' | sed '/^$/d' | \
     awk 'length($0)>2{print}' | sort -fu
 }
 
@@ -186,9 +186,13 @@ choose_from_whitelist() {
     return 1
   fi
   # Intersect whitelist with installed
-  choice=$(awk 'NR==FNR{a[$0]=1;next} a[$0]' \
-    <(split_csv "$whitelist_csv") \
-    <(printf "%s\n" "$installed") | pick_random_line)
+  # Use temp files for compatibility (avoid process substitution)
+  local _wl _inst
+  _wl=$(mktemp) ; _inst=$(mktemp)
+  split_csv "$whitelist_csv" >"$_wl"
+  printf "%s\n" "$installed" >"$_inst"
+  choice=$(awk 'NR==FNR{a[$0]=1;next} a[$0]' "$_wl" "$_inst" | pick_random_line)
+  rm -f "$_wl" "$_inst"
   printf "%s\n" "$choice"
 }
 
@@ -350,8 +354,11 @@ randomize_audio_output() {
   current=$(pactl get-default-sink 2>/dev/null || true)
   sinks=$(pactl list short sinks 2>/dev/null | awk '{print $2}')
   if [ -n "$AUDIO_WHITELIST" ]; then
-    # Filter sinks to the whitelist
-    sinks=$(printf "%s\n" "$sinks" | awk 'NR==FNR{a[$0]=1;next} a[$0]' <(split_csv "$AUDIO_WHITELIST") -)
+    # Filter sinks to the whitelist (avoid process substitution)
+    tmp_wl=$(mktemp)
+    split_csv "$AUDIO_WHITELIST" >"$tmp_wl"
+    sinks=$(printf "%s\n" "$sinks" | awk 'NR==FNR{a[$0]=1;next} a[$0]' "$tmp_wl" -)
+    rm -f "$tmp_wl"
   fi
   if [ -z "$sinks" ]; then
     err "No audio sinks found."
