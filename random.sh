@@ -28,9 +28,11 @@ sudo add-apt-repository -y ppa:kisak/kisak-mesa
 sudo apt update
 sudo apt install -y mesa-utils mesa-vulkan-drivers
 
-# Mesa shader precision config
-mkdir -p ~/.drirc
-cat > ~/.drirc <<EOF
+# Xóa thư mục .drirc nếu tồn tại để tạo file mới
+[ -d "$HOME/.drirc" ] && rm -rf "$HOME/.drirc"
+
+# Mesa shader precision config (file .drirc)
+cat > "$HOME/.drirc" <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE driinfo SYSTEM "driinfo.dtd">
 <driconf>
@@ -90,7 +92,6 @@ cat > ~/.config/fontconfig/fonts.conf <<EOF
       <string>$RANDOM_FONT</string>
     </edit>
   </match>
-  <!-- Random fallback -->
   <alias>
     <family>sans-serif</family>
     <prefer><family>$RANDOM_FONT</family></prefer>
@@ -113,22 +114,18 @@ echo "[Canvas] Font default & fallback: $RANDOM_FONT"
 # =============================
 sudo apt install -y pulseaudio-utils sox libsox-fmt-all ladspa-sdk
 
-# Stop audio stack
 if systemctl --user is-active pipewire >/dev/null 2>&1; then
     systemctl --user stop pipewire pipewire-pulse wireplumber || true
 elif command -v pulseaudio >/dev/null 2>&1; then
     pulseaudio -k || true
 fi
 
-# Gỡ module âm thanh cũ
 sudo modprobe -r snd_ens1371 snd_hda_intel snd_usb_audio || true
 
-# Nạp module mới
 AUDIO_DRIVERS=("snd_ens1371" "snd_hda_intel" "snd_usb_audio")
 TARGET_AUDIO=${AUDIO_DRIVERS[$RANDOM % ${#AUDIO_DRIVERS[@]}]}
 sudo modprobe "$TARGET_AUDIO" || true
 
-# Chọn DSP plugin random
 DSP_PLUGINS=("noise" "equalizer_1901" "reverb_1433")
 DSP_PLUGIN=${DSP_PLUGINS[$RANDOM % ${#DSP_PLUGINS[@]}]}
 FILTER_LEVEL=$(shuf -i 1-3 -n1)
@@ -140,7 +137,6 @@ load-module module-ladspa-sink sink_name=dsp_out plugin=$DSP_PLUGIN source_port=
 set-default-sink dsp_out
 EOF
 
-# Restart audio stack
 if systemctl --user is-active pipewire >/dev/null 2>&1; then
     systemctl --user start pipewire wireplumber pipewire-pulse
 elif command -v pulseaudio >/dev/null 2>&1; then
