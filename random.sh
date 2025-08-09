@@ -1,18 +1,10 @@
 #!/bin/bash
 set -e
 
-echo "[FP-HARDEN] Fingerprint Randomizer cho Ubuntu/Lubuntu 24.04"
-
-# Phát hiện môi trường
-if [ -x "$(command -v lxqt-config)" ]; then
-    GUI_ENV="Lubuntu"
-else
-    GUI_ENV="Ubuntu"
-fi
-echo "Đang chạy trên $GUI_ENV."
+echo "[FP-MAX] Fingerprint Randomizer 10/10 – Ubuntu/Lubuntu 24.04"
 
 # =============================
-# 1. WEBGL – GPU & Mesa Random
+# 1. WebGL – GPU + Mesa + Vulkan
 # =============================
 VMX_FILE="$HOME/.vmware/your_vm.vmx"
 GPU_VENDOR=("0x10de" "0x8086" "0x1002" "0x1414" "0x1043")
@@ -29,15 +21,16 @@ svga.vramSize = "$RANDOM_VRAM"
 svga.vendorID = "$RANDOM_VENDOR"
 svga.deviceID = "$RANDOM_DEVICE"
 EOF
-echo "[WebGL] GPU ID/VRAM thay đổi: $RANDOM_VENDOR / $RANDOM_DEVICE / $RANDOM_VRAM"
+echo "[WebGL] GPU ID/VRAM: $RANDOM_VENDOR / $RANDOM_DEVICE / $RANDOM_VRAM"
 
+# Random Mesa version từ PPA
+sudo add-apt-repository -y ppa:kisak/kisak-mesa
 sudo apt update
 sudo apt install -y mesa-utils mesa-vulkan-drivers
 
-# Random shader precision bằng config Mesa
-MESA_CONF_DIR="$HOME/.drirc"
-mkdir -p "$MESA_CONF_DIR"
-cat > "$MESA_CONF_DIR/drirc" <<EOF
+# Mesa shader precision config
+mkdir -p ~/.drirc
+cat > ~/.drirc <<EOF
 <?xml version="1.0"?>
 <!DOCTYPE driinfo SYSTEM "driinfo.dtd">
 <driconf>
@@ -50,17 +43,32 @@ cat > "$MESA_CONF_DIR/drirc" <<EOF
  </device>
 </driconf>
 EOF
-echo "[WebGL] Mesa shader precision/random config đã tạo."
+
+# Vulkan layer random capability
+mkdir -p ~/.config/vulkan/implicit_layer.d
+cat > ~/.config/vulkan/implicit_layer.d/fp_random.json <<EOF
+{
+    "file_format_version": "1.0.0",
+    "layer": {
+        "name": "FP_RANDOM_LAYER",
+        "type": "INSTANCE",
+        "library_path": "libVkLayer_random.so",
+        "api_version": "1.2.154",
+        "implementation_version": 1,
+        "description": "Random Vulkan Capabilities"
+    }
+}
+EOF
+echo "[WebGL] Mesa + Vulkan config applied."
 
 # =============================
-# 2. CANVAS – Font, DPI, Hinting
+# 2. Canvas – Font, DPI, Fallback
 # =============================
 DPI_SCALE=("1.0" "1.25" "1.5" "1.75" "2.0")
 RANDOM_DPI=${DPI_SCALE[$RANDOM % ${#DPI_SCALE[@]}]}
 gsettings set org.gnome.desktop.interface text-scaling-factor "$RANDOM_DPI" || true
-echo "[Canvas] DPI scaling set: $RANDOM_DPI"
+echo "[Canvas] DPI scaling: $RANDOM_DPI"
 
-# Random font
 FONT_DIR="$HOME/.local/share/fonts"
 mkdir -p "$FONT_DIR"
 FONTS_LIST=("Roboto" "Open Sans" "Lato" "Montserrat" "Source Sans Pro" "Merriweather" "Noto Sans" "Noto Serif" "Ubuntu" "Fira Sans" "Poppins" "Raleway" "Oswald" "PT Sans" "Work Sans")
@@ -72,7 +80,6 @@ if ! fc-list | grep -qi "$RANDOM_FONT"; then
     fc-cache -fv >/dev/null
 fi
 
-# Fontconfig áp dụng font default
 mkdir -p ~/.config/fontconfig
 cat > ~/.config/fontconfig/fonts.conf <<EOF
 <?xml version='1.0'?>
@@ -83,12 +90,67 @@ cat > ~/.config/fontconfig/fonts.conf <<EOF
       <string>$RANDOM_FONT</string>
     </edit>
   </match>
+  <!-- Random fallback -->
+  <alias>
+    <family>sans-serif</family>
+    <prefer><family>$RANDOM_FONT</family></prefer>
+  </alias>
+  <alias>
+    <family>serif</family>
+    <prefer><family>$RANDOM_FONT</family></prefer>
+  </alias>
+  <alias>
+    <family>monospace</family>
+    <prefer><family>$RANDOM_FONT</family></prefer>
+  </alias>
 </fontconfig>
 EOF
 fc-cache -fv >/dev/null
-echo "[Canvas] Font default đổi thành: $RANDOM_FONT"
+echo "[Canvas] Font default & fallback: $RANDOM_FONT"
 
-# Hinting + Subpixel
+# =============================
+# 3. Audio – Driver & DSP plugin
+# =============================
+sudo apt install -y pulseaudio-utils sox libsox-fmt-all ladspa-sdk
+
+# Stop audio stack
+if systemctl --user is-active pipewire >/dev/null 2>&1; then
+    systemctl --user stop pipewire pipewire-pulse wireplumber || true
+elif command -v pulseaudio >/dev/null 2>&1; then
+    pulseaudio -k || true
+fi
+
+# Gỡ module âm thanh cũ
+sudo modprobe -r snd_ens1371 snd_hda_intel snd_usb_audio || true
+
+# Nạp module mới
+AUDIO_DRIVERS=("snd_ens1371" "snd_hda_intel" "snd_usb_audio")
+TARGET_AUDIO=${AUDIO_DRIVERS[$RANDOM % ${#AUDIO_DRIVERS[@]}]}
+sudo modprobe "$TARGET_AUDIO" || true
+
+# Chọn DSP plugin random
+DSP_PLUGINS=("noise" "equalizer_1901" "reverb_1433")
+DSP_PLUGIN=${DSP_PLUGINS[$RANDOM % ${#DSP_PLUGINS[@]}]}
+FILTER_LEVEL=$(shuf -i 1-3 -n1)
+
+mkdir -p ~/.config/pulse
+cat > ~/.config/pulse/default.pa <<EOF
+.include /etc/pulse/default.pa
+load-module module-ladspa-sink sink_name=dsp_out plugin=$DSP_PLUGIN source_port=output control=$FILTER_LEVEL
+set-default-sink dsp_out
+EOF
+
+# Restart audio stack
+if systemctl --user is-active pipewire >/dev/null 2>&1; then
+    systemctl --user start pipewire wireplumber pipewire-pulse
+elif command -v pulseaudio >/dev/null 2>&1; then
+    pulseaudio --start
+fi
+echo "[Audio] Driver: $TARGET_AUDIO | DSP: $DSP_PLUGIN | Level: $FILTER_LEVEL"
+
+# =============================
+# 4. ClientRects – Metrics change
+# =============================
 HINTING_OPTIONS=("true" "false")
 ANTIALIAS_OPTIONS=("true" "false")
 SUBPIXEL_OPTIONS=("rgb" "bgr" "vrgb" "vbgr" "none")
@@ -104,41 +166,22 @@ cat > ~/.config/fontconfig/render.conf <<EOF
     <edit name="hinting" mode="assign"><bool>$RANDOM_HINTING</bool></edit>
     <edit name="antialias" mode="assign"><bool>$RANDOM_ANTIALIAS</bool></edit>
     <edit name="rgba" mode="assign"><const>$RANDOM_SUBPIXEL</const></edit>
+    <edit name="ascent" mode="assign"><double>$(shuf -i 750-850 -n1)</double></edit>
+    <edit name="descent" mode="assign"><double>$(shuf -i 150-250 -n1)</double></edit>
+    <edit name="leading" mode="assign"><double>$(shuf -i 50-120 -n1)</double></edit>
   </match>
 </fontconfig>
 EOF
 fc-cache -fv >/dev/null
-echo "[ClientRects] Render: hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpixel=$RANDOM_SUBPIXEL"
+echo "[ClientRects] hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpixel=$RANDOM_SUBPIXEL"
 
 # =============================
-# 3. AUDIO – Driver & DSP Filter
-# =============================
-sudo apt install -y pulseaudio-utils sox libsox-fmt-all ladspa-sdk
-AUDIO_DRIVERS=("snd_ens1371" "snd_hda_intel" "snd_usb_audio")
-TARGET_AUDIO=${AUDIO_DRIVERS[$RANDOM % ${#AUDIO_DRIVERS[@]}]}
-sudo modprobe -r snd_ens1371 snd_hda_intel snd_usb_audio || true
-sudo modprobe "$TARGET_AUDIO" || true
-
-# Tạo DSP filter noise nhỏ để thay đổi fingerprint
-FILTER_LEVEL=$(shuf -i 1-3 -n1)
-mkdir -p ~/.config/pulse
-cat > ~/.config/pulse/default.pa <<EOF
-.include /etc/pulse/default.pa
-load-module module-ladspa-sink sink_name=dsp_out plugin=noise source_port=output control=$FILTER_LEVEL
-set-default-sink dsp_out
-EOF
-
-pulseaudio -k || true
-pulseaudio --start
-echo "[Audio] Driver: $TARGET_AUDIO | DSP noise level: $FILTER_LEVEL"
-
-# =============================
-# 4. Kết thúc
+# Summary
 # =============================
 echo "-----------------------------------"
 echo "TÓM TẮT:"
 echo "WebGL: Vendor=$RANDOM_VENDOR, Device=$RANDOM_DEVICE, VRAM=$RANDOM_VRAM"
 echo "Canvas: DPI=$RANDOM_DPI, Font=$RANDOM_FONT"
-echo "Audio: Driver=$TARGET_AUDIO, DSP noise=$FILTER_LEVEL"
+echo "Audio: Driver=$TARGET_AUDIO, DSP=$DSP_PLUGIN, Level=$FILTER_LEVEL"
 echo "ClientRects: hinting=$RANDOM_HINTING, antialias=$RANDOM_ANTIALIAS, subpixel=$RANDOM_SUBPIXEL"
-echo "Hãy reboot VM để các thay đổi WebGL/Mesa áp dụng hoàn toàn."
+echo "Hãy reboot VM để các thay đổi áp dụng hoàn toàn."
